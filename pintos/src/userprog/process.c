@@ -20,9 +20,6 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-void get_command(const char* file_name, char* command);
-void construct_esp(const char* file_name, void** esp);
-
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -33,9 +30,6 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-  char command[256];
-
-  get_command(file_name, command);
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -44,11 +38,8 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  if(!filesys_open(command))
-	  return -1;
-
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (command, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -97,37 +88,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-	struct thread *parent = thread_current();
-	struct thread *child = NULL;
-	struct thread *temp;
-	struct list_elem *e;
-	bool flag=false;
-	int exit_status=-1;
-
-	//while(1); // for test
-
-	if(child_tid <0 || parent == NULL)
-		return -1;
-	
-	for(e=list_begin(&parent->child_list); e!=list_end(&parent->child_list); e=list_next(e)){
-		temp = list_entry(e, struct thread, child_elem);
-		if(temp->tid == child_tid){
-			child = temp;
-			flag = true;
-			break;
-		}
-	}
-
-	if(flag==false || child==NULL)
-		return -1;
-
-	sema_down(&(child->sema));
-	exit_status = child->exit_status;
-	list_remove(&(child->child_elem));
-	sema_up(&(child->sema_exit));
-
-  	return exit_status;
-	//return -1;
+  return -1;
 }
 
 /* Free the current process's resources. */
@@ -153,8 +114,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  sema_up(&(cur->sema));
-  sema_down(&(cur->sema_exit));
 }
 
 /* Sets up the CPU for running user code in the current
@@ -242,72 +201,6 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
 
-void get_command(const char* file_name, char* command)
-{
-	char *ret_ptr, *save_ptr;
-	strlcpy(command, file_name, strlen(file_name)+1);
-	ret_ptr = strtok_r(command, " ", &save_ptr);
-}
-
-void construct_esp(const char* file_name, void** esp)
-{
-	int argc=0;
-	int length, total_length=0;
-	char command[256];
-	//char** argv;
-	char *ret_ptr, *save_ptr;
-
-	strlcpy(command, file_name, strlen(file_name)+1);
-	ret_ptr = strtok_r(command, " ", &save_ptr);
-	
-	while(ret_ptr != NULL){
-		ret_ptr = strtok_r(NULL, " ", &save_ptr);
-		argc++;
-	}
-
-	//argv = (char**)malloc(argc*sizeof(char*));
-	char* argv[argc];
-	strlcpy(command, file_name, strlen(file_name)+1);
-	ret_ptr = strtok_r(command, " ", &save_ptr);
-
-	for(int i=0; i<argc; i++){
-		if(!ret_ptr)
-			break;
-		argv[i] = ret_ptr;
-		ret_ptr = strtok_r(NULL, " ", &save_ptr);
-	}
-	
-	for(int j=argc-1; j>=0; j--){
-		length = strlen(argv[j])+1;
-		total_length += length;
-		*esp -= length;
-		strlcpy(*esp, argv[j], length);
-		argv[j]= *esp;
-	}
-
-	if(total_length%4!=0)
-		*esp -= 4-(total_length%4);
-
-	// push NULL
-	*esp -= 4;
-	**(unsigned**)esp = 0;
-
-	for(int k=argc-1; k>=0; k--){
-		*esp -= 4;
-		**(unsigned int**)esp = (unsigned int)argv[k];
-	}
-
-	// push argv address
-	*esp -= 4;
-	**(unsigned int**)esp = (unsigned int)(*esp)+4;
-
-	*esp -= 4;
-	**(unsigned int**)esp = argc;
-
-	*esp -= 4;
-	**(unsigned int**)esp = 0;
-}
-
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
@@ -321,7 +214,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
-  char command[256];
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -329,13 +221,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  get_command(file_name, command);
-
   /* Open executable file. */
-  file = filesys_open (command);
+  file = filesys_open (file_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", command);
+      printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
 
@@ -348,7 +238,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", command);
+      printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
 
@@ -414,17 +304,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
-
-  construct_esp(file_name, esp);
-
-  /*
-  printf("***********test***********\n");
-  uintptr_t ofs;
-  ofs = (uintptr_t)*esp;
-  size_t byte_size=0xc0000000-ofs;
-  hex_dump(ofs, *esp, byte_size, true);
-  */
-
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -562,7 +441,6 @@ setup_stack (void **esp)
       else
         palloc_free_page (kpage);
     }
-
   return success;
 }
 
