@@ -171,6 +171,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -182,6 +183,8 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+	old_level = intr_disable();
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -197,6 +200,8 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+	intr_set_level(old_level);
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -464,9 +469,23 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
 
-  old_level = intr_disable ();
+  //old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
-  intr_set_level (old_level);
+  //intr_set_level (old_level);
+
+  struct thread *parent = running_thread();
+  if(t == parent)
+	  t->parent = NULL;
+  else{
+  	t->parent = parent;
+	list_push_back(&parent->child_list, &t->child_elem);
+  }
+
+  sema_init(&t->sema, 0);
+  sema_init(&t->sema_exit, 0);
+
+  list_init(&t->child_list);
+  t->exit_status = 1;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
