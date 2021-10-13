@@ -17,12 +17,12 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 void get_command(const char* file_name, char* command);
 void construct_esp(const char* file_name, void** esp);
-
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -49,8 +49,21 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (command, PRI_DEFAULT, start_process, fn_copy);
+  
+  sema_down(&thread_current()->load_lock);
+  
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
+
+  struct list_elem* e;
+  struct thread* t;
+  for(e=list_begin(&thread_current()->child_list); e!=list_end(&thread_current()->child_list); e=list_next(e)){
+  	t = list_entry(e, struct thread, child_elem);
+	//if(t->exit_status== -1)
+	if(t->zombie)
+		return process_wait(tid);
+  }
+
   return tid;
 }
 
@@ -72,8 +85,12 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  sema_up(&thread_current()->parent->load_lock);
+  if (!success){		 
+	thread_current()->zombie=true;
+	  exit(-1);
+	//thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -333,6 +350,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Open executable file. */
   file = filesys_open (command);
+
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", command);

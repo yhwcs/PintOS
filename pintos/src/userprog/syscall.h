@@ -1,6 +1,8 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
+#include <stdbool.h>
+
 typedef int pid_t;
 
 void syscall_init (void);
@@ -17,5 +19,13 @@ int max_of_four_int(int a, int b, int c, int d);
 
 void check_validity_of_address(void *address);
 void syscall_argument(int count, void *args[], void* esp);
+
+bool create(const char *file, unsigned initial_size);
+bool remove(const char *file);
+int open(const char *file);
+int filesize(int fd);
+void seek(int fd, unsigned position);
+unsigned tell(int fd);
+void close(int fd);
 
 #endif /* userprog/syscall.h */

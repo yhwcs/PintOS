@@ -7,6 +7,15 @@
 
 #include "threads/synch.h"
 
+#include "filesys/off_t.h"
+
+struct file
+{
+	struct inode *inode;
+	off_t pos;
+	bool deny_write;
+};
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -110,6 +119,11 @@ struct thread
 
 	struct semaphore sema;
 	struct semaphore sema_exit;
+
+	struct semaphore load_lock;
+	bool zombie;
+
+	struct file* fd[128];
   };
 
 /* If false (default), use round-robin scheduler.
