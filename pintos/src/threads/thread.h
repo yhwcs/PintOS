@@ -9,6 +9,10 @@
 
 #include "filesys/off_t.h"
 
+#ifndef USERPROG
+extern bool thread_prior_aging;
+#endif
+
 struct file
 {
 	struct inode *inode;
@@ -34,6 +38,18 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+#define FRACTION (1<<14)
+
+#define INT_MUL_FLOAT(i,f) (i*f)
+#define INT_SUB_FLOAT(i,f) (i*FRACTION - f)
+#define FLOAT_ADD_INT(f,i) (f+i*FRACTION)
+#define FLOAT_SUB_INT(f,i) (f-i*FRACTION)
+#define FLOAT_DIV_INT(f,i) (f/i)
+#define FLOAT_ADD_FLOAT(f1,f2) (f1+f2)
+#define FLOAT_SUB_FLOAT(f1,f2) (f1-f2)
+//#define FLOAT_MUL_FLOAT(f1,f2,f3) {f3=f1; f3=f3*f2/FRACTION;}
+//#define FLOAT_DIV_FLOAT(f1,f2,f3) {f3=f1; f3=f3*FRACTION/f2;}
 
 /* A kernel thread or user process.
 
@@ -124,6 +140,11 @@ struct thread
 	bool zombie;
 
 	struct file* fd[128];
+
+	int64_t wakeup_time;
+
+	int recent_cpu;
+	int nice;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -157,9 +178,19 @@ void thread_foreach (thread_action_func *, void *);
 int thread_get_priority (void);
 void thread_set_priority (int);
 
+bool compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_aging(void);
+
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+int max_priority(void);
+void update_load_avg_and_recent_cpu(void);
+void update_priority(void);
+
+int FLOAT_MUL_FLOAT(int f1, int f2);
+int FLOAT_DIV_FLOAT(int f1, int f2);
 
 #endif /* threads/thread.h */
