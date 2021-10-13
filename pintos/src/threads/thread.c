@@ -54,6 +54,12 @@ static long long user_ticks;    /* # of timer ticks in user programs. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /* # of timer ticks since last yield. */
 
+#ifndef USERPROG
+bool thread_prior_aging;
+#endif
+
+static int load_avg;
+
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -89,6 +95,7 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 
+  load_avg = 0;
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
@@ -96,6 +103,8 @@ thread_init (void)
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
+  initial_thread->nice = 0;
+  initial_thread->recent_cpu = 0;
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -137,6 +146,11 @@ thread_tick (void)
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
+
+#ifndef USERPROG
+  if(thread_prior_aging == true)
+	  thread_aging();
+#endif
 }
 
 /* Prints thread statistics. */
@@ -206,6 +220,10 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  if(priority > thread_get_priority()){
+  	thread_yield();
+  }
+
   return tid;
 }
 
@@ -242,7 +260,8 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  //list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, compare_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -313,7 +332,8 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    //list_push_back (&ready_list, &cur->elem);
+	  list_insert_ordered(&ready_list, &cur->elem, compare_priority, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -340,7 +360,14 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  //thread_current ()->priority = new_priority;
+	int thread_priority = thread_current()->priority;
+	if(thread_mlfqs)
+		return;
+	thread_current()->priority = new_priority;
+	if(new_priority < thread_priority){
+		thread_yield();
+	}
 }
 
 /* Returns the current thread's priority. */
@@ -355,6 +382,16 @@ void
 thread_set_nice (int nice UNUSED) 
 {
   /* Not yet implemented. */
+	struct thread *t = thread_current();
+	t->nice = nice;
+	t->priority = FLOAT_SUB_FLOAT(FLOAT_SUB_FLOAT(FLOAT_ADD_INT(0, PRI_MAX), FLOAT_DIV_INT(t->recent_cpu, 4)), INT_MUL_FLOAT(2, FLOAT_ADD_INT(0, t->nice))) / FRACTION;
+	if(t->priority > PRI_MAX)
+		t->priority = PRI_MAX;
+	if(t->priority < PRI_MIN)
+		t->priority = PRI_MIN;
+
+	if(t->priority < max_priority())
+		thread_yield();
 }
 
 /* Returns the current thread's nice value. */
@@ -362,7 +399,7 @@ int
 thread_get_nice (void) 
 {
   /* Not yet implemented. */
-  return 0;
+	return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
@@ -370,7 +407,8 @@ int
 thread_get_load_avg (void) 
 {
   /* Not yet implemented. */
-  return 0;
+  //return 0;
+	return INT_MUL_FLOAT(100, load_avg) / FRACTION;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
@@ -378,7 +416,8 @@ int
 thread_get_recent_cpu (void) 
 {
   /* Not yet implemented. */
-  return 0;
+ // return 0;
+	return INT_MUL_FLOAT(100, thread_current()->recent_cpu) / FRACTION;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -472,6 +511,9 @@ init_thread (struct thread *t, const char *name, int priority)
   //old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   //intr_set_level (old_level);
+
+	t->recent_cpu = running_thread()->recent_cpu;
+	t->nice = running_thread()->nice;
 
   struct thread *parent = running_thread();
   if(t == parent)
@@ -607,3 +649,82 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+bool compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux)
+{
+	struct thread *t_a = list_entry(a, struct thread, elem);
+	struct thread *t_b = list_entry(b, struct thread, elem);
+	return t_a->priority > t_b->priority;
+}
+
+void thread_aging(void)
+{
+	struct list_elem *e = list_begin(&ready_list);
+	while(e != list_end(&ready_list)){
+		list_entry(e, struct thread, elem)->priority++;
+		e = list_next(e);
+	}
+}
+
+int max_priority()
+{
+	int priority = -1;
+	struct thread *t;
+	if(!list_empty(&ready_list)){
+		t = list_entry(list_front(&ready_list), struct thread, elem);
+		priority = t->priority;
+	}
+	return priority;
+}
+
+void update_priority(void)
+{
+	struct thread *t;
+	struct list_elem *e;
+
+	for(e=list_begin(&all_list); e!=list_end(&all_list); e=list_next(e)){
+		t = list_entry(e, struct thread, allelem);
+		t->priority = FLOAT_SUB_FLOAT(FLOAT_SUB_FLOAT(FLOAT_ADD_INT(0, PRI_MAX), FLOAT_DIV_INT(t->recent_cpu, 4)), INT_MUL_FLOAT(2, FLOAT_ADD_INT(0, t->nice))) / FRACTION;
+		if(t->priority > PRI_MAX)
+			t->priority = PRI_MAX;
+		if(t->priority < PRI_MIN)
+			t->priority = PRI_MIN;
+	}
+
+	if(thread_current()->priority < max_priority())
+		intr_yield_on_return();
+}
+
+void update_load_avg_and_recent_cpu(void)
+{
+	int ready_threads = list_size(&ready_list);
+   	struct thread *t;
+	struct list_elem* e;
+
+	if(thread_current() != idle_thread){
+		ready_threads++;
+	}
+
+	load_avg = FLOAT_DIV_INT(FLOAT_ADD_INT(INT_MUL_FLOAT(59, load_avg), ready_threads), 60);
+
+	for(e = list_begin(&all_list); e!=list_end(&all_list); e=list_next(e)){
+		t = list_entry(e, struct thread, allelem);
+		if(t != idle_thread){
+			t->recent_cpu = FLOAT_ADD_INT(FLOAT_MUL_FLOAT(FLOAT_DIV_FLOAT(INT_MUL_FLOAT(2, load_avg), FLOAT_ADD_INT(INT_MUL_FLOAT(2, load_avg), 1)), t->recent_cpu), t->nice);
+		}
+	}
+}
+
+int FLOAT_MUL_FLOAT(int f1, int f2)
+{
+	int64_t temp = f1;
+	temp = temp * f2 /FRACTION;
+	return (int)temp;
+}
+
+int FLOAT_DIV_FLOAT(int f1, int f2)
+{
+	int64_t temp = f1;
+	temp = temp * FRACTION / f2;
+	return (int)temp;	
+}
